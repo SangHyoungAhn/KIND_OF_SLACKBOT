@@ -37,6 +37,7 @@ public class SlackService {
 
             methods.chatPostMessage(request);
             log.info("Slack - Test Message 전송완료 : {}", message);
+            log.info("---------------------------------------");
         }catch(Exception e){
             log.warn("Slack Error - {}", e.getMessage());
         }
