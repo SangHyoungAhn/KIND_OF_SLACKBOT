@@ -10,6 +10,7 @@ import com.slack.api.model.view.View;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.core.kindof.slackbot.handler.SlackMeetingHandler;
 import org.eclipse.jetty.util.IO;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -20,16 +21,21 @@ import java.util.List;
 import static com.slack.api.model.block.Blocks.*;
 import static com.slack.api.model.block.Blocks.section;
 import static com.slack.api.model.block.composition.BlockCompositions.*;
-import static com.slack.api.model.block.element.BlockElements.asContextElements;
-import static com.slack.api.model.block.element.BlockElements.plainTextInput;
+import static com.slack.api.model.block.element.BlockElements.*;
 import static com.slack.api.model.view.Views.*;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class SlackCommandService {
 
     private final App slackApp;
+    private final SlackMeetingHandler meetingHandler;
+
+    public SlackCommandService(App slackApp, SlackMeetingHandler meetingHandler ) {
+        this.slackApp = slackApp;
+        this.meetingHandler = meetingHandler;
+        this.init();
+    }
 
     @Value("${SLACK_ADMIN_CHANNEL_ID}")
     private String adminChannelId;
@@ -41,16 +47,22 @@ public class SlackCommandService {
     public void init() {
 
         registerChannelInfoCommand();
+
         registerSubmissionHandler();
         registerFixRequestCommand();
+
+        registerMeetingAlarmCommand();
+        registerMeetingSubmissionHandler();
 
     }
 
     private void registerChannelInfoCommand(){
         slackApp.command("/채널정보", (req, ctx) -> {
-            log.info("'/채널정보' 커맨드 ");
             String channelId = req.getPayload().getChannelId();
+            String userName = req.getPayload().getUserName();
             // 아까 확인한 getNumOfMembers()를 사용하는 메서드 호출
+
+            log.info(">>>> [COMMAND] {} 님이 /채널정보 모달을 실행했습니다.", userName);
             var blocks = getChannelInfoBlocks(ctx, channelId);
 
             return ctx.ack(res -> res
@@ -63,17 +75,35 @@ public class SlackCommandService {
     private void registerFixRequestCommand(){
         slackApp.command("/부탁해",(req,ctx) ->{
             String triggerId = req.getPayload().getTriggerId();
+            String userName = req.getPayload().getUserName();
 
             ctx.client().viewsOpen(r-> r
                     .triggerId(triggerId)
                     .view(buildFixModal())
             );
+
+            log.info(">>>> [COMMAND] {} 님이 /부탁해 모달을 실행했습니다.", userName);
+            return ctx.ack();
+        });
+    }
+
+    private void registerMeetingAlarmCommand(){
+        slackApp.command("/회의알림발송", (req,ctx)->{
+            String triggerId = req.getPayload().getTriggerId();
+            String userName = req.getPayload().getUserName();
+
+            ctx.client().viewsOpen(r-> r
+                    .triggerId(triggerId)
+                    .view(buildingMeetingNotificationModal(userName))
+            );
+
+            log.info(">>>> [COMMAND] {} 님이 /회의알림발송 모달을 실행했습니다.", userName);
             return ctx.ack();
         });
     }
 
     private void registerSubmissionHandler(){
-        slackApp.viewSubmission("fix-lab-submission", (req, ctx) -> {
+        slackApp.viewSubmission("submit-fix-modal", (req, ctx) -> {
             log.info(">>>> [SUCCESS] 제출 신호 수신 성공!");
 
             // 1. 데이터 추출 (보내주신 Suggestion 구조 적용)
@@ -93,6 +123,16 @@ public class SlackCommandService {
             }
 
             // 3. 슬랙에 "확인 완료" 응답 (이게 있어야 모달이 닫히고 뱅글뱅글 도는 게 멈춥니다)
+            return ctx.ack();
+        });
+    }
+
+    private void registerMeetingSubmissionHandler(){
+        slackApp.viewSubmission("submit-meeting-notification", (req, ctx)->{
+            log.info(">>>> [SUCCESS] 회의 알림 제출 신호 수신!");
+
+            meetingHandler.handleMeetingSubmission(req.getPayload(), ctx.client());
+
             return ctx.ack();
         });
     }
@@ -123,7 +163,7 @@ public class SlackCommandService {
     private View buildFixModal(){
         return view(v -> v
                 .type("modal")
-                .callbackId("fix-lab-submission")
+                .callbackId("submit-fix-modal")
                 .title(viewTitle(t -> t.type("plain_text").text("🛠️ 부탁해요")))
                 .submit(viewSubmit(s -> s.type("plain_text").text("의견 보내기 \uD83D\uDE80")))
                 .close(viewClose(c -> c.type("plain_text").text("취소")))
@@ -140,6 +180,28 @@ public class SlackCommandService {
                                 .element(plainTextInput(p -> p.actionId("content_input").multiline(true)))
                                 .label(plainText("✍\uFE0F 개선 제안 및 부탁할 점"))
                         )
+                ))
+        );
+    }
+
+    private View buildingMeetingNotificationModal(String userName){
+        return view(v-> v
+                .type("modal")
+                .callbackId("submit-meeting-notification")
+                .title(viewTitle(t -> t.type("plain_text").text("📅 회의 알림 발송")))
+                .submit(viewSubmit(s -> s.type("plain_text").text("발송하기 🚀")))
+                .close(viewClose(c -> c.type("plain_text").text("취소")))
+                .blocks(asBlocks(
+                        // 회의 제목
+                        input(i -> i.blockId("title_block").element(plainTextInput(p -> p.actionId("title_input").placeholder(plainText("예: 주간회의")))).label(plainText("📌 회의 제목"))),
+                        // 회의 안건
+                        input(i -> i.blockId("content_block").element(plainTextInput(p -> p.actionId("content_input").multiline(true).placeholder(plainText("주요 논의 사항을 적어주세요.")) )).label(plainText("📝 회의 안건 및 상세 내용"))),
+                        // 참석자 선택 (멀티 유저 셀렉트)
+                        input(i -> i.blockId("users_block").element(multiUsersSelect(u -> u.actionId("users_select").placeholder(plainText("참석할 동료들을 선택하세요")))).label(plainText("👥 참석자 선택"))),
+                        divider(),
+                        // 시간 설정
+                        section(s -> s.blockId("time_block").text(markdownText("⏰ *회의 시작 시간 설정*")).accessory(timePicker(t -> t.actionId("time_select").initialTime("14:00")))),
+                        context(c -> c.elements(asContextElements(markdownText(":bell: 선택된 분들께 개별 DM으로 알림이 전송됩니다."))))
                 ))
         );
     }
