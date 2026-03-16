@@ -32,10 +32,11 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    implementation 'com.slack.api.bolt:1.40.0'
-    implementation 'com.slack.api:bolt-socket-mode:1.40.0'
+    implementation 'com.slack.api:bolt-socket-mode:1.48.0'
     implementation 'com.slack.api:bolt-jakarta-servlet:1.40.0'
-
+    implementation 'com.slack.api:bolt-servlet:1.48.0'
+    implementation 'com.slack.api:bolt-jetty:1.48.0'
+    implementation 'org.slf4j:slf4j-simple:1.7.36'
 }
 
 tasks.named('test') {

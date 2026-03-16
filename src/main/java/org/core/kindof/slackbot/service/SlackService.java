@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 public class SlackService {
-    @Value("${slack.token}")
+    @Value("${SLACK_BOT_TOKEN}")
     private String token;
 
     public void sendMessage(String message, String channel) {
