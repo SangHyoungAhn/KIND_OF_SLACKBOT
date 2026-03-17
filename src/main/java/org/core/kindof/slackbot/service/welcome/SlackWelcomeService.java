@@ -1,4 +1,4 @@
-package org.core.kindof.slackbot.service;
+package org.core.kindof.slackbot.service.welcome;
 
 import com.slack.api.bolt.App;
 import com.slack.api.model.event.MemberJoinedChannelEvent;
@@ -24,7 +24,9 @@ public class SlackWelcomeService {
     @PostConstruct
     public void init() {
         registerWelcomeEvent();
+
     }
+
 
     private void registerWelcomeEvent() {
         slackApp.event(MemberJoinedChannelEvent.class, (payload, ctx) -> {
@@ -45,10 +47,27 @@ public class SlackWelcomeService {
                             .channel(channelId)
                             .user(userId)
                             .blocks(asBlocks(
-                                    header(h -> h.text(plainText("🎉 동아닷컴의 새로운 가족을 환영합니다!"))),
-                                    section(s -> s.text(markdownText("반가워요, <@" + userId + ">님!\n'디지털 라운지'에 오신 것을 환영해요."))),
+                                    // 1. 헤더: 강렬하고 환영하는 느낌
+                                    header(h -> h.text(plainText("🎊 동아닷컴의 새로운 가족을 환영합니다! 🎊"))),
+                                    // 2. 본문 1: 공간의 의미 설명
+                                    section(s -> s.text(markdownText(
+                                            "반가워요, <@" + userId + ">님! 👋\n" +
+                                                    "이곳은 신입사원 여러분이 동아닷컴에 첫발을 내딛는 설레는 순간을 기록하고,\n" +
+                                                    "기존 구성원들이 따뜻한 박수를 건네는 우리만의 소중한 공간 **'디지털 라운지'**입니다. ✨"
+                                    ))),
+
+                                    // 3. 본문 2: 부담을 덜어주는 부드러운 가이드
+                                    section(s -> s.text(markdownText(
+                                            "거창한 포부나 딱딱한 자기소개가 아니어도 괜찮아요. 😊\n" +
+                                                    "오늘의 기분, 좋아하는 커피 취향, 혹은 아주 소소한 일상 이야기를 들려주세요.\n" +
+                                                    "**우리가 나누는 이 가벼운 첫 대화가 바로 동아닷컴의 새로운 문화를 만드는 시작이 됩니다!** 🚀"
+                                    ))),
+                                    // 4. 구분선: 가독성을 위해 추가
                                     divider(),
-                                    context(c -> c.elements(asContextElements(markdownText("이 메시지는 본인에게만 보입니다."))))
+                                    // 5. 푸터: 행동 유도 및 안내
+                                    context(c -> c.elements(asContextElements(
+                                            markdownText("💬 아래 입력창에 가벼운 안부 한마디를 남겨보세요! (이 메시지는 본인에게만 보입니다 🔒)")
+                                    )))
                             ))
                     );
 

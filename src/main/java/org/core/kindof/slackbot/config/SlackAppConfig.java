@@ -4,6 +4,8 @@ import com.slack.api.bolt.App;
 import com.slack.api.bolt.AppConfig;
 
 import com.slack.api.bolt.jakarta_servlet.SlackAppServlet;
+import org.core.kindof.slackbot.service.team.SlackTeamCommandService;
+import org.core.kindof.slackbot.service.welcome.SlackWelcomeService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -19,12 +21,23 @@ public class SlackAppConfig {
     private String signingSecret;
 
     @Bean
-    public App initSlackApp(){
+    public App initSlackApp(SlackTeamCommandService teamCommandService,
+                            SlackWelcomeService welcomeService){
         AppConfig config = AppConfig.builder()
                 .singleTeamBotToken(botToken)
-                .signingSecret(signingSecret).build();
+                .signingSecret(signingSecret)
+                .build();
 
-        return new App(config);
+        App app = new App(config);
+        //"팀합류" 커맨드 등록
+        app.command("/팀합류", teamCommandService::handleTeamJoin);
+
+        app.blockAction("welcome_confirm_join", (req, ctx) ->{
+            welcomeService.processTeamJoin(req,ctx);
+            return ctx.ack();
+        });
+
+        return app;
     }
 
     @Bean
