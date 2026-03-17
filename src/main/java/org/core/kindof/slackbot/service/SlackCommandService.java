@@ -4,6 +4,7 @@ package org.core.kindof.slackbot.service;
 import com.slack.api.bolt.App;
 import com.slack.api.bolt.context.builtin.SlashCommandContext;
 import com.slack.api.methods.SlackApiException;
+import com.slack.api.methods.response.conversations.ConversationsHistoryResponse;
 import com.slack.api.methods.response.conversations.ConversationsInfoResponse;
 import com.slack.api.model.block.LayoutBlock;
 import com.slack.api.model.view.View;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import static com.slack.api.model.block.Blocks.*;
 import static com.slack.api.model.block.Blocks.section;
@@ -53,22 +55,87 @@ public class SlackCommandService {
 
         registerMeetingAlarmCommand();
         registerMeetingSubmissionHandler();
+        
+        registerCleanupCommand();
 
+    }
+
+    private void registerCleanupCommand() {
+        slackApp.command("/청소해줘", (req, ctx) -> {
+            String channelId = req.getPayload().getChannelId();
+            log.info(">>>> [COMMAND] /청소해줘 실행 (채널: {})", channelId);
+            try {
+                // 최근 메시지 50개 조회
+                ConversationsHistoryResponse history = ctx.client().conversationsHistory(r -> r
+                        .token(ctx.getBotToken())
+                        .channel(channelId)
+                        .limit(50)
+                );
+                if (history.isOk()) {
+                    int deleteCount = 0;
+                    for (var msg : history.getMessages()) {
+                        // 1. 봇 ID가 있거나
+                        // 2. 앱 ID가 있거나
+                        // 3. 메시지 서브타입이 봇이거나
+                        // 4. 메시지 안에 'blocks'가 들어있는 경우 (보통 상세 정보는 블록으로 구성됨)
+                        boolean isBotMessage = msg.getBotId() != null
+                                || msg.getAppId() != null
+                                || "bot_message".equals(msg.getSubtype())
+                                || (msg.getBlocks() != null && !msg.getBlocks().isEmpty());
+
+                        if (isBotMessage) {
+                            var result = ctx.client().chatDelete(d -> d
+                                    .token(ctx.getBotToken())
+                                    .channel(channelId)
+                                    .ts(msg.getTs())
+                            );
+
+                            if(result.isOk()) {
+                                deleteCount++;
+                                log.info(">>>> [SUCCESS] 삭제 성공: {}", msg.getTs());
+                            } else {
+                                log.error(">>>> [FAIL] 삭제 실패: {}, 사유: {}", msg.getTs(), result.getError());
+                            }
+                        }
+                    }
+                    // 결과 보고 (본인에게만 보임)
+                    return ctx.ack("🧹 봇 메시지 " + deleteCount + "개를 깔끔하게 청소했습니다!");
+                } else {
+                    // 여기서 에러 로그를 찍어야 왜 안되는지 알 수 있어요!
+                    log.error(">>>> 히스토리 조회 실패: {}", history.getError());
+                    return ctx.ack("❌ 청소 실패 원인: " + history.getError());
+                }
+            } catch (Exception e) {
+                log.error(">>>> [CLEANUP ERROR] ", e);
+                return ctx.ack("❌ 시스템 에러가 발생했습니다.");
+            }
+        });
     }
 
     private void registerChannelInfoCommand(){
         slackApp.command("/채널정보", (req, ctx) -> {
             String channelId = req.getPayload().getChannelId();
             String userName = req.getPayload().getUserName();
-            // 아까 확인한 getNumOfMembers()를 사용하는 메서드 호출
 
-            log.info(">>>> [COMMAND] {} 님이 /채널정보 모달을 실행했습니다.", userName);
+            log.info(">>>> [COMMAND] {} 님이 /채널정보를 실행했습니다.", userName);
             var blocks = getChannelInfoBlocks(ctx, channelId);
 
-            return ctx.ack(res -> res
-                    .responseType("in_channel") // 모두에게 보이게 설정
-                    .blocks(blocks)
-            );
+            // 1. 우선 슬랙 서버에 "명령어 확인했어"라고 빈 응답을 보냅니다. (필수)
+            ctx.ack();
+
+            // 2. 비동기로 '진짜 메시지'를 채널에 쏩니다.
+            try {
+                ctx.client().chatPostMessage(r -> r
+                        .token(ctx.getBotToken())
+                        .channel(channelId)
+                        .blocks(blocks)
+                        .text("🔍 채널 상세 정보가 도착했습니다.") // 알림용 텍스트
+                );
+            } catch (Exception e) {
+                log.error(">>>> [ERROR] 채널 정보 전송 실패: ", e);
+            }
+
+            return ctx.ack(); // 이미 위에서 호출했지만 구조상 반환
         });
     }
 

@@ -1,8 +1,9 @@
 package org.core.kindof.slackbot.service;
 
 import com.slack.api.bolt.App;
-import com.slack.api.methods.MethodsClient;
-import com.slack.api.model.Message;
+import com.slack.api.model.block.Blocks;
+import com.slack.api.model.block.composition.BlockCompositions;
+import java.util.List;
 import com.slack.api.model.block.LayoutBlock;
 import com.slack.api.model.event.MessageBotEvent;
 import com.slack.api.model.event.MessageEvent;
@@ -11,7 +12,9 @@ import org.core.kindof.slackbot.handler.SlackMeetingHandler;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,6 +32,7 @@ public class SlackEventService {
     }
 
     private void init() {
+
         // 1. [사람] 메시지 감지
         slackApp.event(MessageEvent.class, (payload, ctx) -> {
             MessageEvent event = payload.getEvent();
@@ -40,9 +44,93 @@ public class SlackEventService {
         slackApp.event(MessageBotEvent.class, (payload, ctx) -> {
             log.info(">>>> [DETECT] 봇(워크플로우) 메시지 감지!");
             MessageBotEvent event = payload.getEvent();
+            String text = event.getText();
+
+            if (text != null && text.matches("(?s).*새로운 RT.*등록되었습니다.*")) {
+                log.info(">>>> [MATCH] 성공! 버튼 생성 및 담당자 DM 발송을 시도합니다.");
+
+                try {
+                    // A. 원본 메시지에 버튼 댓글(스레드) 달기
+                    ctx.client().chatPostMessage(r -> r
+                            .token(ctx.getBotToken())
+                            .channel(event.getChannel())
+                            .threadTs(event.getTs())
+                            .text("🚀 새로운 RT 확인 요청 알림")
+                            .blocks(List.of(
+                                    com.slack.api.model.block.Blocks.section(s -> s.text(
+                                            com.slack.api.model.block.composition.BlockCompositions.markdownText("담당자분은 아래 버튼을 눌러 확인을 완료해 주세요! 👇")
+                                    )),
+                                    com.slack.api.model.block.Blocks.actions(a -> a.elements(List.of(
+                                            com.slack.api.model.block.element.BlockElements.button(b -> b
+                                                    .text(com.slack.api.model.block.composition.BlockCompositions.plainText("RT 확인하기", true))
+                                                    .actionId("btn_rt_confirm")
+                                                    .style("primary")
+                                                    .value("confirm_clicked")
+                                            )
+                                    )))
+                            ))
+                    );
+
+                    // B. 담당자들에게 DM 쏘기 (실제 ID들로 리스트를 만드세요)
+                    List<String> managers = List.of("U0AGP6SMZML"); // 상형님 ID 등 담당자 리스트
+                    for (String managerId : managers) {
+                        ctx.client().chatPostMessage(m -> m
+                                .token(ctx.getBotToken())
+                                .channel(managerId)
+                                .text("📢 새로운 RT 확인 요청이 왔습니다!")
+                                .blocks(List.of(
+                                        com.slack.api.model.block.Blocks.section(s -> s.text(
+                                                com.slack.api.model.block.composition.BlockCompositions.markdownText(
+                                                        "📢 *새로운 RT가 등록되었습니다!*\n지정된 채널로 이동하여 내용을 확인하고 [확인하기] 버튼을 눌러주세요."
+                                                )
+                                        ))
+                                ))
+                        );
+                    }
+                    log.info(">>>> [SUCCESS] 모든 프로세스 완료!");
+
+                } catch (Exception e) {
+                    log.error(">>>> [ERROR] 처리 중 에러 발생: ", e);
+                }
+            } else {
+                log.info(">>>> [MATCH 실패] 들어온 텍스트: {}", text);
+            }
+
             handleEvent(event.getText(), event.getBlocks(), ctx.client());
             return ctx.ack();
         });
+
+        // 담당자가 버튼을 눌렀을 때 실행되는 로직
+        slackApp.blockAction("btn_rt_confirm", (req, ctx) -> {
+            log.info(">>>> [SUCCESS] 버튼 클릭 신호 도착!");
+
+            String userId = req.getPayload().getUser().getId();
+            String channelId = req.getPayload().getChannel().getId();
+            String messageTs = req.getPayload().getContainer().getMessageTs(); // 버튼 메시지의 TS
+
+            try {
+                String currentTime = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+
+                ctx.client().chatUpdate(u -> u
+                        .token(ctx.getBotToken())
+                        .channel(channelId)
+                        .ts(messageTs)
+                        .text("🔴 RT 확인 완료")
+                        .blocks(List.of(
+                                com.slack.api.model.block.Blocks.section(s -> s.text(
+                                        com.slack.api.model.block.composition.BlockCompositions.markdownText(
+                                                "🔴 *RT 확인 완료* (담당자: <@" + userId + ">님 / 시각: " + currentTime + ")"
+                                        )
+                                ))
+                        ))
+                );
+            } catch (Exception e) {
+                log.error(">>>> 버튼 상태 업데이트 실패: ", e);
+            }
+
+            return ctx.ack();
+        });
+
     }
 
     // 공통 필터링 로직
@@ -56,36 +144,64 @@ public class SlackEventService {
         }
     }
 
-    // ⭐ 핵심 로직 (상형님이 만드셨던 handleWorkflowMessage의 내용)
     private void processWorkflowLogic(String fullText, com.slack.api.methods.MethodsClient client) {
         log.info(">>>> [DEBUG] 분석할 전체 텍스트: {}", fullText);
 
-        // 1. 참석자 ID 리스트 추출 (<@U12345> 패턴)
-        List<String> userIds = new ArrayList<>();
+        // 1. 참석자 ID 추출 (중복 제거용 Set)
+        Set<String> participantSet = new LinkedHashSet<>();
         Pattern userPattern = Pattern.compile("<@([A-Z0-9]+)>");
         Matcher userMatcher = userPattern.matcher(fullText);
+
         while (userMatcher.find()) {
-            userIds.add(userMatcher.group(1));
+            participantSet.add(userMatcher.group(1));
         }
 
-        log.info(">>>> [DEBUG] 추출된 사용자 ID 리스트: {}", userIds);
+        // 2. 리스트 변환 (중복이 제거된 최종 명단)
+        List<String> userIds = new ArrayList<>(participantSet);
 
         if (userIds.isEmpty()) {
             log.warn(">>>> [STOP] 멘션된 사용자가 없어 발송을 중단합니다.");
             return;
         }
 
-        // 2. 안건 내용 추출
-        String content = "상세 내용을 확인해 주세요.";
-        if (fullText.contains("안건")) {
-            String[] split = fullText.split("안건");
-            if (split.length > 1) {
-                content = split[1].trim();
-            }
+        // 3. 요청자 ID 추출
+        String requesterId = "Workflow_BOT";
+        Pattern reqPattern = Pattern.compile("요청자\\s*\\n*<@([A-Z0-9]+)>");
+        Matcher reqMatcher = reqPattern.matcher(fullText);
+        if(reqMatcher.find()){
+            requesterId = reqMatcher.group(1);
         }
 
-        // 3. DM 발송 (Handler 재사용)
-        meetingHandler.sendMeetingDMs("Workflow_Bot", userIds, "📅 워크플로우 회의 알림", content, "메시지 내 일시 참조", client);
-        log.info(">>>> [FINISH] {}명에게 알림 발송 완료!", userIds.size());
+        // 4. 일시(시작 시간) 추출
+        String startTime = "시간정보 없음";
+        Pattern timePattern = Pattern.compile("\\*날짜/시간\\*\\s*\\n*(.*)");
+        Matcher timeMatcher = timePattern.matcher(fullText);
+        if (timeMatcher.find()) {
+            startTime = timeMatcher.group(1).split("\n")[0].trim();
+        }
+
+        // 5. 안건 내용 추출
+        String content = "상세 내용을 확인해 주세요.";
+        Pattern contentPattern = Pattern.compile("\\*안건\\*\\s*\\n*(.*)");
+        Matcher contentMatcher = contentPattern.matcher(fullText);
+        if (contentMatcher.find()) {
+            content = contentMatcher.group(1).trim();
+        }
+
+        // 6. 제목 추출 (첫 줄이 이모지라면 두 번째 줄 등을 고려해야 할 수 있음)
+        // 현재는 콘솔 결과에 따라 첫 줄을 제목으로 사용
+        String title = fullText.split("\n")[0].replaceAll("[:*]", "").trim();
+
+        // 7. DM 발송 (Handler 호출)
+        meetingHandler.sendMeetingDMs(
+                requesterId,
+                userIds,
+                title,
+                content,
+                startTime,
+                client
+        );
+
+        log.info(">>>> [SUCCESS] DM 발송 요청 완료! 요청자: {}, 참석자 수: {}", requesterId, userIds.size());
     }
 }
