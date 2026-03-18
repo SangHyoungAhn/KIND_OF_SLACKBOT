@@ -115,6 +115,7 @@ public class SlackCommandService {
     private void registerChannelInfoCommand(){
         slackApp.command("/채널정보", (req, ctx) -> {
             String channelId = req.getPayload().getChannelId();
+            String userId = req.getPayload().getUserId();
             String userName = req.getPayload().getUserName();
 
             log.info(">>>> [COMMAND] {} 님이 /채널정보를 실행했습니다.", userName);
@@ -125,9 +126,10 @@ public class SlackCommandService {
 
             // 2. 비동기로 '진짜 메시지'를 채널에 쏩니다.
             try {
-                ctx.client().chatPostMessage(r -> r
+                ctx.client().chatPostEphemeral(r -> r
                         .token(ctx.getBotToken())
                         .channel(channelId)
+                        .user(userId)
                         .blocks(blocks)
                         .text("🔍 채널 상세 정보가 도착했습니다.") // 알림용 텍스트
                 );
